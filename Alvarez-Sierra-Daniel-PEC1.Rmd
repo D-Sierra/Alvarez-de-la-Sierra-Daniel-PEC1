@@ -1,0 +1,32 @@
+---
+title: "Alvarez-de-la-Sierra-Daniel-PEC1"
+author: "Daniel Álvarez de la Sierra"
+date: "2025-03-23"
+output: 
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+```
+
+# Abstract
+
+# Objetivos
+
+# Métodos
+
+# Resultados
+
+# Discusión
+
+# Conclusiones
+
+# Referencias
+
+```{r}
+df <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX")
+```
+

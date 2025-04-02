@@ -1,8 +1,6 @@
 ---
-title: "README"
-author: "Daniel Álvarez de la Sierra"
-date: "2025-04-02"
-output: html_document
+title: "Resumen de Datos"
+output: github_document
 ---
 
 ```{r setup, include=FALSE}

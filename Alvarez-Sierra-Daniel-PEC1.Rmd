@@ -5,28 +5,250 @@ date: "2025-03-23"
 output: 
   pdf_document:
     toc: true
+    latex_engine: xelatex
+urlcolor: blue
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE)
 library(readxl)
+library(SummarizedExperiment)
+library(kableExtra)
+library(knitr)
+library(GGally)
+library(ggplot2)
+library(patchwork)
+library(POMA)
 ```
 
-# Abstract
+\newpage
 
-# Objetivos
+# URL al repositorio en GitHub
 
-# Métodos
+Los ficheros asociados a esta PEC se encuentran en el siguiente repositorio [PEC1 Daniel Álvarez de la Sierra](https://github.com/D-Sierra/Alvarez-de-la-Sierra-Daniel-PEC1).
 
-# Resultados
+# Descripción del dataset
 
-# Discusión
-
-# Conclusiones
-
-# Referencias
+Se selecciona uno de los datasets del repositorio proporcionado en las instrucciones de la PEC1. En concreto el conjunto de datos utilizado por el CIMCB para su [tutorial de análisis de datos ómicos](https://cimcb.github.io/MetabWorkflowTutorial/Tutorial1.html). Estos datos, accesibles también en el repositorio Metabolomics Workbench bajo el identificador [PR000699](https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?Mode=Project&ProjectID=PR000699), contienen la concentración de distintos metabolitos en la orina de individuos con cáncer gástrico, enfermedad gástrica benigna, y controles sanos. 
 
 ```{r}
-df <- read_excel("TIO2+PTYR-human-MSS+MSIvsPD.XLSX")
+#Cargamos la hoja del excel que contiene los datos con la concentracion de metabolito por cada muestra
+df <- read_excel("Gastric_NMR.xlsx", sheet = "data")
+#Cargamos la hoja del excel que contiene la equivalencia entre los codigos asignados a cada metabolito y su nombre real
+nombres_metabolitos <- read_excel("Gastric_NMR.xlsx", sheet = "peak")
 ```
+
+En primer lugar visualizamos la estructura general de las dos hojas de excel que hemos cargado:
+
+```{r}
+kable(head(df[, 1:10]), caption = "Encabezado de la hoja \"data\" del excel.") %>% kable_styling(latex_options = c("striped", "hold_position"))
+
+kable(head(nombres_metabolitos), caption = "Encabezado de la hoja \"peak\" del excel.") %>% kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+La primera contiene el conjunto de datos del estudio, la primera columna corresponde a los índices de las filas, desde la segunda (Day of Expt) a la séptima (Sample_id) se encuentran los metadatos asociados a cada muestra, y desde la octava (M1) hasta la última  tenemos las concentraciones correspondientes a todos los metabolitos analizados para cada una de las muestras. La segunda tabla cargada contiene la equivalencia entre los codigos asignados a cada metabolito (M1:M129) y sus nombres reales.
+
+A continuación, utilizamos ambos dataframes para crear nuestro objeto de tipo `SummarizedExperiment`:
+
+```{r}
+#Generamos una matriz con los datos de concentracion de los metabolitos
+metabolitos <- t(as.matrix(df[, 8:ncol(df)]))
+#En los nombres originales estos analitos usan letras griegas para diferenciar ambas isoformas, estos simbolos se pierden y el nomnbre de la columna paas a estar duplicado, lo que puede dar problemas más adelante. Se cambia el nombre de forma manual.
+nombres_metabolitos[128, "Label"] <- "pi_Methylhistidine"
+nombres_metabolitos[129, "Label"] <- "tau_Methylhistidine"
+rownames(metabolitos) <- nombres_metabolitos$Label #Asignamos datos de fila usando el dataframe nombres_metabolitos
+colnames(metabolitos) <- df$Sample_id #Asignamos los nombres de columna
+
+#Modificamos el tipo de datos de las columnas de "df" que corresponden a la información de las muestras
+df$`Day of Expt` <- as.Date(df$`Day of Expt`)
+df$Sample_Type <- as.factor(df$Sample_Type)
+df$QC <- as.factor(df$QC)
+df$Batch <- as.factor(df$Batch)
+
+#Creamos el objeto de tipo SummarizedExperiment utilizando
+se <- SummarizedExperiment(assays=list(metabolitos=metabolitos), colData=as.data.frame(df[,2:7]))
+#Añadimos los metadatos
+metadata(se)$ID_proyecto <- "PR000699"
+metadata(se)$Publicacion_asociada <- "doi: 10.21228/M8B10B"
+metadata(se)$Autor_principal <- "David Broadhurst"
+
+se
+```
+
+La principal diferencia entre un objeto de tipo `ExpressionSet` y uno de tipo `SummarizedExperiment` es que este último puede considerarse una extensión del primero, pero es más flexible en cuanto a la accesibilidad a la información de sus filas.
+
+```{r guardado de datos}
+#Guardamos el objeto SummarizedExperiment en formato rda
+save(se, file = "SummarizedExperiment_PR000699.rda")
+#Guardamos el fichero correspondiente a la hoja "data" del excel original como un csv
+write.csv(df, "data_df.csv")
+#Guardamos el fichero correspondiente a la hoja "peak" del excel original como un csv
+write.csv(nombres_metabolitos, "nombres_metabolitos_df.csv")
+```
+
+# Análisis de los datos
+
+## Descripción de las muestras
+
+```{r}
+#Generamos un resumen de los datos de las muestras
+summary(as.data.frame(colData(se)))
+```
+El dataset contiene información sobre 140 muestras distintas.
+
+Los metadatos de las muestras contienen información sobre la fecha en la que se realizó el experimento, el tipo de muestra (control o problema), el batch de procesamiento, y la codificación de la muestra.
+
+El tipo de muestra esta codificado en dos columnas distintas, "Sample_Type" y "QC", por lo que en primer lugar conviene comprobar que ambas son equivalentes y no existen incongruencias.
+
+```{r}
+#Tabla para evaluar la correspondencia entre ambas columnas de metadatos sobre el tipo de muestra
+table(as.data.frame(colData(se))$Sample_Type, as.data.frame(colData(se))$QC)
+```
+
+La coincidencia es pefecta, por lo que ambas contienen la misma información.
+
+De la misma manera, es lógico pensar que el Batch hace referencia a la fecha del procesamiento experimental de la muestra, por lo que podría ser que columna "Day.of.Expt" y "Batch" sean equivalentes:
+
+```{r}
+#Tabla para evaluar la correspondencia entre la columna con la fecha del experimento y la del Batch
+table(as.data.frame(colData(se))$Day.of.Expt, as.data.frame(colData(se))$Batch)
+```
+
+De nuevo, hay una correspondencia perfecta entre ambas, por lo que cada batch hace referencia a un único momento de realización de los experimentos, y estas dos columnas son equivalentes.
+
+## Aánalisis descriptivo de los datos experimentales
+
+```{r, include = FALSE}
+#Número de analitos que se han estudiado en este proyecto
+nrow(assay(se, 1))
+```
+
+En este experimento se ha cuantificado en la orina de pacientes y controles la concentración de 129 analitos diferentes. 
+
+Al crear el objeto SummarizedExperiment, el ensayo "metabolitos" fue añadido en forma de matriz, por lo que sabemos que todas las variables incluidas son de tipo numérico. En primer lugar comprobaremos si existen datos ausentes en la matriz de datos:
+
+```{r}
+#Creamos un df con el número de NAs por cada fila del ensayo
+NAs_metabolito <- data.frame(NAs = rowSums(is.na(assay(se, 1))))
+#Creamos un histograma para representar el número de NAs por metabolito
+ggplot(NAs_metabolito, aes(x = NAs)) +
+  geom_histogram(bins = 30, fill = "lightcoral", color = "gray25") +
+  labs(title = "Histograma número de NAs por metabolito", x = "Número de NAs", y = "Frecuencia") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+Como vemos, hay un gran número de valores ausentes. Lo primero sería realizar un análisis preliminar para ver si el número de NAs no depende del batch de las muestras o del tipo de muestra.
+
+```{r}
+#Creamos un df con el número de NAs por cada columna del ensayo
+NAs_muestra <-  data.frame(NAs = colSums(is.na(assay(se, 1))))
+NAs_muestra$Sample_id <- rownames(NAs_muestra)
+#Creamos un df con los metadatos y 
+metadatos_muestras <- as.data.frame(colData(se))
+NAs_muestra <- merge(NAs_muestra, metadatos_muestras, by = "Sample_id")
+
+#Creamos dos boxplots para explorar visualmente el número de NAs por tipo de muestra y por batch de análisis
+NAs_QC_plot <- ggplot(NAs_muestra, aes(x = Sample_Type, y = NAs)) + 
+                geom_boxplot(color = "darkgreen", fill = "seagreen3", alpha = 0.4) +
+                labs(title = "Box plot de NAs por QC", x = "QC", y = "Número de NAs") +
+                theme_bw() +
+                theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+NAs_batch_plot <- ggplot(NAs_muestra, aes(x = Batch, y = NAs)) + 
+                    geom_boxplot(color = "blue4", fill = "dodgerblue2", alpha = 0.4) +
+                    labs(title = "Box plot de NAs por batch", x = "Batch", y = "Número de NAs") +
+                    theme_bw() +
+                    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+NAs_QC_plot + NAs_batch_plot
+```
+
+A primera vista no parece que haya una diferencia significativa en cuanto al número de NAs según el tipo de muestra o el batch de análisis, lo cual podría reflejar un problema a nivel experimental.
+
+El siguiente paso sería realizar una descripción básica de los datos. Podríamos obtener los estadísticos básicos univariantes (media aritmética, mediana, SD...). Sin embargo, con un número tan elevado de variables esto no tiene tanta utilidad debido a lo laborioso que sería su interpretación.
+
+Ocurre lo mismo en el caso del análisis bivariante. El siguiente  ejemplo nos permitiría realizar un análisis visual de la distribución de las variables y de la correlación entre ellas en experimentos con un número más reducido de variables:
+
+```{r}
+#Ejemplo de análisis visual univariado y de correlaciones entre los distintos pares de variables
+ejemplo <- ggpairs(t(assay(se, 1)[1:5,])) + theme_bw()
+ejemplo
+```
+
+## Análisis exploratorio multivariante
+
+En casos con un número tan elevado de variables lo más recomendable es realizar un análisis multivariante.
+
+### Preprocesamiento
+
+En primer lugar, realizamos la imputación de los datos ausentes. Para ello utilizamos la función PomaImpute del paquete POMA.
+
+```{r}
+#Realizamos la imputación de los missing values
+imputed_se <- PomaImpute(se, zeros_as_na = FALSE, remove_na = TRUE, cutoff = 40, method = "knn")
+imputed_se
+```
+A continuación, realizamos la normalización de los datos para evitar que cuyos valores se encuentro en distintos rangos puedan afectar a los análisis posteriores.
+
+```{r}
+#Normalización de los datos
+normalized_se <- PomaNorm(imputed_se, method = "log_pareto")
+```
+
+Observamos el efecto de la normalización:
+
+```{r}
+#Boxplot de los datos prenormalización
+no_norm <- PomaBoxplots(imputed_se) +
+  ggplot2::ggtitle("Datos no normalizados")
+#Boxplot de los datos postnormalización
+norm <- PomaBoxplots(normalized_se) +
+  ggplot2::ggtitle("Datos normalizados") 
+
+no_norm / norm
+```
+
+### Análisis multivariante
+
+Para este tipo de datos uno de los mejores análisis exploratorios que podría realizar es un PCA. Con ello conseguimos reducir el número de dimensiones que vamos a utilizar creando componentes principales que sean combinaciones lineales de las variables existentes de tal forma que capturen la mayor parte de la variabilidad posible.
+
+En primer lugar realizamos el análisis de PCA y visualizamos los resultados utilizando como outcome el batch:
+
+```{r}
+#Analisis mediante componentes principales
+poma_pca_batch <- PomaPCA(normalized_se, outcome = "Batch")
+
+
+#Extraemos los datos del gráfico de componentes principales
+datos_pca <- poma_pca_batch$factors_plot$data
+#Visualizamos las muestras en el espacio compuesto por las dos primeras componentes principales
+ggplot(datos_pca, aes(x = PC1, y = PC2, color = group)) +
+  geom_point() +
+  stat_ellipse() +
+  labs(title = "PCA de muestras por grupo", x = "PC1", y = "PC2", color = "QC") +
+  theme_minimal()
+```
+
+Parece que las muestras no se agrupan en función del momento del procesamiento, por lo que podemos descartar que haya un efecto asociado al batch.
+
+A continuación visualizamos el mismo gráfico agrupando las muestras según sean de controles o de pacientes problema:
+
+```{r}
+#Analisis mediante componentes principales
+poma_pca <- PomaPCA(normalized_se, outcome = "Sample_Type")
+
+
+#Extraemos los datos del gráfico de componentes principales
+datos_pca <- poma_pca$factors_plot$data
+#Visualizamos las muestras en el espacio compuesto por las dos primeras componentes principales
+ggplot(datos_pca, aes(x = PC1, y = PC2, color = group)) +
+  geom_point() +
+  stat_ellipse() +
+  labs(title = "PCA de muestras por grupo", x = "PC1", y = "PC2", color = "QC") +
+  theme_minimal()
+```
+
+Observamos que las muestras de los controles son muy similares entre ellas y se agrupan juntas. Aunque las muestras problema muestran mucha más variabilidad pueden separarse de forma clara de los controles.
+
+El análisis preliminar sugiere que los pacientes con cáncer gástrico tienen un perfil de secreción de metabolitos en orina distinto al de los controles sanos. Sería necesario ampliar el estudio para encontrar que metabolitos contribuyen en mayor medida a esta diferencia, y averiguar si podría usarse una combinación de ellos como marcador de cáncer gástrico para mejorar el diagnóstico de esta patología.
+
 
